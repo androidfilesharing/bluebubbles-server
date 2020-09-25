@@ -46,6 +46,10 @@
     transition: background-color 0.2s;
 }
 
+span > #serverPassword {
+    width: calc(100% - 130px);
+}
+
 .aInput:hover {
     background-color: grey;
 }
@@ -68,7 +72,7 @@
     margin-right: 0.5rem;
     width: 46px;
     height: 26px;
-    background-color: #e6e6e6;
+    background-color: lightgrey;
     border-radius: 23px;
     vertical-align: text-bottom;
     transition: all 0.3s linear;
@@ -195,81 +199,18 @@
     color: var(--primary-color);
 }
 
-.aDeviceRow {
+#settingsMainRightContainer > span {
+    width: calc(100% - 90px);
+    max-width: calc(100% - 90px);
     display: flex;
     justify-content: space-between;
-    width: calc(100% - 140px);
-    margin-left: 40px;
-    margin-bottom: 40px;
-    color: var(--primary-color);
+    flex-direction: row;
+    align-items: center;
 }
 
-#devicesHeadings {
-    display: flex;
-    justify-content: space-between;
-    width: calc(100% - 130px);
-    margin-left: 30px;
-}
-
-#devicesHeadings > h1 {
-    font-size: 18px;
-    margin: 0;
-    color: var(--primary-color);
-}
-
-.aDeviceRow p {
-    color: var(--primary-color) !important;
-}
-
-#logHeadings {
-    display: flex;
-    justify-content: space-between;
-    width: calc(100% - 130px);
-    margin-left: 30px;
-    margin-bottom: 15px;
-}
-
-#logHeadings > h1 {
-    font-size: 18px;
-    margin: 0;
-    color: var(--primary-color);
-}
-
-.aLogRow {
-    display: flex;
-    justify-content: space-between;
-    width: calc(100% - 140px);
-    margin-left: 40px;
-    margin-bottom: 20px;
-    padding-bottom: 5px;
-    color: var(--primary-color);
-    /* border-bottom: 1px solid var(--primary-color); */
-}
-
-.aLogRow p {
-    margin: 0;
-}
-
-.aLogTimestamp {
-    width: 85px;
-    min-width: 85px;
-    margin-left: 25px !important;
-    text-align: right;
-}
-
-#clearLogsButton {
-    background: none;
-    text-decoration: none;
-    outline: none;
-    border-radius: 8px;
-    border: 2px solid var(--primary-color);
-    padding: 5px;
-    margin-left: 25px;
-    color: var(--primary-color);
-    transition: border-radius 0.25s;
-}
-
-#clearLogsButton:hover {
-    border-radius: 12px;
+#passwordView {
+    height: 28px;
+    width: 28px;
+    fill: grey;
     cursor: pointer;
 }
