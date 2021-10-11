@@ -1,7 +1,7 @@
 import { Server } from "@server/index";
 import { createTextChangeRange } from "typescript";
 
-export class ServerRepo {
+export class ServerInterface {
     static async getDatabaseTotals({ only = ["handle", "message", "chat", "attachment"] }: { only?: string[] } = {}) {
         // If an element ends with an 's', remove it.
         // Also, make them all lower-cased
@@ -73,17 +73,21 @@ export class ServerRepo {
 
         // Helper for adding counts to the results
         const addToResults = (result: any[], identifier: string) => {
+            const totals: any = {};
+            for (const cat of items) {
+                totals[`${cat}s`] = 0;
+            }
+
             for (const i of result) {
                 if (!Object.keys(results).includes(i.chat_guid)) {
                     results[i.chat_guid] = {
                         chatGuid: i.chat_guid,
                         groupName: i.group_name,
-                        totals: {}
+                        totals
                     };
                 }
 
                 results[i.chat_guid].totals[identifier] = i.media_count;
-                break;
             }
         };
 
