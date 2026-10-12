@@ -257,20 +257,50 @@ cd packages/server && npm run dist
 npm run release
 ```
 
+**Known Issue: node-mac-contacts compile failure**
+
+On macOS with Node.js 20.x, `npm install` may fail with a `napi_add_finalizer` signature mismatch when compiling `node-mac-contacts`. This is due to Node.js 20 N-API headers being incompatible with the native module's build.
+
+**Workaround:**
+
+```bash
+# Install without running native build scripts
+npm install --ignore-scripts
+
+# Rebuild native modules using electron-rebuild (which uses Electron's Node headers)
+cd packages/server && npm run rebuild
+```
+
+The `npm run rebuild` command runs `electron-rebuild`, which compiles native modules against Electron's Node.js headers instead of the system Node.js headers, avoiding the ABI incompatibility.
+
 ### Lockfile Management
 
-The `package-lock.json` contains platform-specific optional dependencies that are only resolved on macOS:
+The `package-lock.json` contains platform-specific optional dependencies:
 - `node-mac-contacts` (darwin only)
 - `node-mac-permissions` (darwin only)
 - `fsevents` (darwin only)
 - `dmg-license` (darwin only)
+- `iconv-corefoundation` (darwin only)
 
-**Important:** Do NOT regenerate the lockfile on Linux. If you need to update dependencies:
+**Important:** When updating dependencies on Linux:
 
 1. Use npm overrides in root `package.json` for version pinning
 2. Run `npm install --package-lock-only --force` to update versions
-3. Verify darwin entries are preserved: `grep -c '"darwin"' package-lock.json` (should be ≥5)
-4. For a complete lockfile regeneration, do it on macOS
+3. Do NOT use `--legacy-peer-deps` as it drops peer dependency trees (like react-scripts)
+4. Verify package count: `grep -c '"node_modules/' package-lock.json` (should be ~2300+)
+5. Verify darwin entries: `grep -c '"darwin"' package-lock.json` (should be ≥5)
+6. Verify react-scripts: `grep -c react-scripts package-lock.json` (should be ≥5)
+
+**Verification script:**
+
+```bash
+# Compare package keys with upstream
+echo "Our packages: $(grep -c '"node_modules/' package-lock.json)"
+echo "Darwin entries: $(grep -c '"darwin"' package-lock.json)"
+echo "react-scripts refs: $(grep -c react-scripts package-lock.json)"
+```
+
+For a complete lockfile regeneration (recommended), do it on macOS.
 
 ### Signed Builds
 
