@@ -1,0 +1,174 @@
+name: Secure-Build-BlueBubbles-Server
+
+on:
+  push:
+    branches: [ master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      sign_app:
+        description: 'Sign the application (requires certificates in secrets)'
+        required: false
+        default: 'false'
+        type: boolean
+      notarize_app:
+        description: 'Notarize the application (requires Apple credentials in secrets)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest]
+        arch: [x64, arm64]
+        python-version: ["3.10"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Setup Node.js 20.11
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.11'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Install the Apple certificate and provisioning profile
+        if: github.event.inputs.sign_app == 'true' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Skip if secrets are not configured
+          if [ -z "$BUILD_CERTIFICATE_BASE64" ]; then
+            echo "Signing secrets not configured, skipping certificate installation"
+            exit 0
+          fi
+
+          # create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # import certificate and provisioning profile from secrets
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+          echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+
+          # create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # apply provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+
+      - name: Build BlueBubbles (Unsigned)
+        if: github.event.inputs.sign_app != 'true' && !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BB_SIGN_APP: "false"
+          BB_NOTARIZE_APP: "false"
+        run: |
+          cd packages/server
+          npm run build
+          npx electron-builder build --mac --${{ matrix.arch }} --publish never --config ./scripts/electron-builder-config.js
+
+      - name: Build & Sign BlueBubbles
+        if: github.event.inputs.sign_app == 'true' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BB_SIGN_APP: ${{ github.event.inputs.sign_app == 'true' && secrets.BUILD_CERTIFICATE_BASE64 != '' && 'true' || 'false' }}
+          BB_NOTARIZE_APP: ${{ github.event.inputs.notarize_app == 'true' && secrets.APPLE_ID != '' && 'true' || 'false' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cd packages/server
+          npm run build
+          npx electron-builder build --mac --${{ matrix.arch }} --publish never --config ./scripts/electron-builder-config.js
+
+      - name: Generate SHA-256 Checksums
+        run: |
+          cd packages/server/releases
+          echo "# SHA-256 Checksums" > checksums-${{ matrix.arch }}.txt
+          echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> checksums-${{ matrix.arch }}.txt
+          echo "Commit: ${{ github.sha }}" >> checksums-${{ matrix.arch }}.txt
+          echo "" >> checksums-${{ matrix.arch }}.txt
+          for file in *.dmg *.zip *.blockmap; do
+            if [ -f "$file" ]; then
+              shasum -a 256 "$file" >> checksums-${{ matrix.arch }}.txt
+            fi
+          done
+          cat checksums-${{ matrix.arch }}.txt
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bluebubbles-${{ matrix.arch }}
+          path: |
+            packages/server/releases/*.dmg
+            packages/server/releases/*.zip
+            packages/server/releases/*.blockmap
+            packages/server/releases/checksums-${{ matrix.arch }}.txt
+          retention-days: 30
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Combine checksums
+        run: |
+          echo "# SHA-256 Checksums for BlueBubbles Server" > combined-checksums.txt
+          echo "Release: ${{ github.ref_name }}" >> combined-checksums.txt
+          echo "Commit: ${{ github.sha }}" >> combined-checksums.txt
+          echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> combined-checksums.txt
+          echo "" >> combined-checksums.txt
+          for arch in x64 arm64; do
+            if [ -f "artifacts/bluebubbles-$arch/checksums-$arch.txt" ]; then
+              echo "## $arch" >> combined-checksums.txt
+              grep -v "^#\|^Generated:\|^Commit:\|^$" artifacts/bluebubbles-$arch/checksums-$arch.txt >> combined-checksums.txt || true
+              echo "" >> combined-checksums.txt
+            fi
+          done
+          cat combined-checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.zip
+            combined-checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

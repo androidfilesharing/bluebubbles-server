@@ -14,6 +14,13 @@ import * as fs from "fs";
 // Internal libraries
 import { Server } from "@server";
 import { isNotEmpty, onlyAlphaNumeric, safeTrim } from "@server/helpers/utils";
+import {
+    secureCompare,
+    checkRateLimit,
+    recordFailedAttempt,
+    clearRateLimit,
+    extractCredential
+} from "./security";
 import { EventCache } from "@server/eventCache";
 import { CertificateService } from "@server/services/certificateService";
 
@@ -106,11 +113,65 @@ export class HttpService extends Loggable {
     configureKoa() {
         if (!this.koaApp) return;
 
-        // Allow cross origin requests
-        this.koaApp.use(koaCors());
+        // Configure CORS with an allowlist
+        // Empty string means allow all origins (backwards compatible)
+        // Comma-separated list restricts to those origins
+        // Supports wildcards like "*.bluebubbles.app"
+        const corsOrigins = Server().repo.getConfig("cors_allowed_origins") as string;
+        const allowedOrigins = corsOrigins
+            ? corsOrigins.split(",").map(o => o.trim()).filter(o => o.length > 0)
+            : [];
 
-        // This allows us to properly pull the IP from the request
-        this.koaApp.proxy = true;
+        const checkOrigin = (requestOrigin: string | undefined): string | boolean => {
+            if (!requestOrigin) {
+                return false;
+            }
+
+            // If no allowlist configured, allow all origins (backwards compatible)
+            if (allowedOrigins.length === 0) {
+                return requestOrigin;
+            }
+
+            for (const pattern of allowedOrigins) {
+                if (pattern === "*") {
+                    return requestOrigin;
+                }
+
+                // Handle wildcard subdomain patterns like "*.example.com"
+                if (pattern.startsWith("*.")) {
+                    const suffix = pattern.substring(1); // ".example.com"
+                    try {
+                        const url = new URL(requestOrigin);
+                        if (url.hostname.endsWith(suffix) || url.hostname === suffix.substring(1)) {
+                            return requestOrigin;
+                        }
+                    } catch {
+                        // Invalid URL
+                    }
+                } else if (requestOrigin === pattern) {
+                    return requestOrigin;
+                }
+            }
+
+            this.log.debug(`CORS blocked request from origin: ${requestOrigin}`);
+            return false;
+        };
+
+        this.koaApp.use(
+            koaCors({
+                origin: (request) => {
+                    const result = checkOrigin(request.headers.origin);
+                    return typeof result === "string" ? result : "";
+                },
+                credentials: true
+            })
+        );
+
+        // Configure proxy trust for X-Forwarded-For header
+        // Only enable this when running behind a known proxy (e.g., Cloudflare, nginx)
+        // to prevent IP spoofing via X-Forwarded-For header
+        const trustProxy = Boolean(Server().repo.getConfig("trust_proxy"));
+        this.koaApp.proxy = trustProxy;
 
         // This is used here so that we can catch errors in KoaBody as well
         this.koaApp.use(ErrorMiddleware);
@@ -190,20 +251,62 @@ export class HttpService extends Loggable {
                 this.log.info(`Client disconnected (Total Clients: ${this.socketServer.sockets.sockets.size})`);
             });
 
-            let pass = socket.handshake.query?.password ?? socket.handshake.query?.guid;
+            const clientIp = socket.handshake.address || "unknown";
+            const windowMs = (Server().repo.getConfig("auth_rate_limit_window_ms") as number) || 60000;
+            const maxAttempts = (Server().repo.getConfig("auth_rate_limit_max_attempts") as number) || 10;
+            const lockoutDurationMs = (Server().repo.getConfig("auth_lockout_duration_ms") as number) || 300000;
+
+            const rateLimitCheck = checkRateLimit(clientIp, { windowMs, maxAttempts, lockoutDurationMs });
+            if (!rateLimitCheck.allowed) {
+                this.log.info(`Client rate-limited. Closing connection.`);
+                socket.emit("exception", { error: "Too many authentication attempts. Please try again later." });
+                socket.disconnect();
+                return;
+            }
+
             const cfgPass = String((await Server().repo.getConfig("password")) as string);
+            const allowQueryParam = Boolean(Server().repo.getConfig("allow_query_param_auth"));
 
-            // Decode the param incase it contains URL encoded characters
-            pass = decodeURI(pass as string);
+            const authHeader = socket.handshake.headers?.authorization;
+            const authPayload = socket.handshake.auth as { password?: string; token?: string };
+            const queryParams = socket.handshake.query as { guid?: string; password?: string; token?: string };
 
-            // Basic authentication
-            if (safeTrim(pass) === safeTrim(cfgPass)) {
+            let credential: string | null = null;
+
+            if (authHeader) {
+                const extracted = extractCredential(authHeader, {}, true);
+                credential = extracted.credential;
+            }
+
+            if (!credential && authPayload?.password) {
+                credential = authPayload.password;
+            } else if (!credential && authPayload?.token) {
+                credential = authPayload.token;
+            }
+
+            if (!credential && allowQueryParam) {
+                const extracted = extractCredential(undefined, queryParams, true);
+                credential = extracted.credential;
+            }
+
+            if (credential) {
+                credential = decodeURI(credential);
+            }
+
+            if (credential && secureCompare(safeTrim(credential), safeTrim(cfgPass))) {
+                clearRateLimit(clientIp);
                 this.log.info(
                     `Client Authenticated Successfully (Total Clients: ${this.socketServer.sockets.sockets.size})`
                 );
             } else {
+                const result = recordFailedAttempt(clientIp, { windowMs, maxAttempts, lockoutDurationMs });
                 socket.disconnect();
-                this.log.info(`Closing client connection. Authentication failed.`);
+                if (result.locked) {
+                    this.log.info(`Closing client connection. Authentication failed. Account locked.`);
+                } else {
+                    this.log.info(`Closing client connection. Authentication failed.`);
+                }
+                return;
             }
 
             /**

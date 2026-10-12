@@ -56,4 +56,11 @@ export const DEFAULT_DB_ITEMS: { [key: string]: () => any } = {
     landing_page_path: () => "",
     open_findmy_on_startup: () => 1,
     auto_lock_mac: () => 0,
+    // Security settings
+    allow_query_param_auth: () => 1,
+    cors_allowed_origins: () => "",
+    trust_proxy: () => 0,
+    auth_rate_limit_window_ms: () => 60000,
+    auth_rate_limit_max_attempts: () => 10,
+    auth_lockout_duration_ms: () => 300000,
 };

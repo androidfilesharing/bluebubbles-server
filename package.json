@@ -21,12 +21,18 @@
         "url": "https://www.github.com/BlueBubblesApp/BlueBubbles-Server/issues"
     },
     "homepage": "https://www.bluebubbles.app",
-    "devEngines": {
-        "node": "20.11.x",
-        "npm": ">=10.x",
-        "python": ">=3.10.x"
+    "engines": {
+        "node": ">=20.11.0",
+        "npm": ">=10.0.0"
     },
     "devDependencies": {
         "concurrently": "^7.0.0"
+    },
+    "overrides": {
+        "axios": "^1.9.0",
+        "js-yaml": "^4.3.0",
+        "koa": "^2.16.4",
+        "socket.io": "^4.8.1",
+        "typeorm": "^0.3.31"
     }
 }
