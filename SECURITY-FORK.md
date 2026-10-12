@@ -207,6 +207,96 @@ Most conflicts will be in `index.ts` if upstream modifies the HTTP/socket setup.
    - Run `npm install && npm run build`
    - Optionally sign with your own certificate
 
+## Build Procedures
+
+### Prerequisites
+
+- **Node.js 20.11.x** (matches upstream requirements)
+- **npm 10.x** or later
+- **Python 3.10+** (for native module builds)
+- **Xcode Command Line Tools** (macOS only)
+
+### What Can Be Verified on Linux
+
+The following can be run on any platform:
+
+```bash
+# Install dependencies (ignoring native scripts that require macOS)
+npm install --ignore-scripts --legacy-peer-deps --force
+
+# TypeScript type checking
+cd packages/server && npx tsc --noEmit
+
+# Lint security files (requires NODE_PATH for workspace resolution)
+cd packages/server && NODE_PATH=./node_modules npx eslint --ext=ts \
+  src/server/api/http/security/ \
+  src/server/api/http/api/v1/middleware/authMiddleware.ts
+
+# Run security tests
+cd packages/server && npm run test:security
+```
+
+### What Requires macOS
+
+The following must be run on macOS:
+
+```bash
+# Full npm install with native module compilation
+npm install
+
+# Native module rebuild (better-sqlite3, node-mac-contacts, node-mac-permissions)
+cd packages/server && npm run rebuild
+
+# Build the Electron app
+npm run build
+
+# Create DMG installer
+cd packages/server && npm run dist
+
+# Full release build with publishing
+npm run release
+```
+
+### Lockfile Management
+
+The `package-lock.json` contains platform-specific optional dependencies that are only resolved on macOS:
+- `node-mac-contacts` (darwin only)
+- `node-mac-permissions` (darwin only)
+- `fsevents` (darwin only)
+- `dmg-license` (darwin only)
+
+**Important:** Do NOT regenerate the lockfile on Linux. If you need to update dependencies:
+
+1. Use npm overrides in root `package.json` for version pinning
+2. Run `npm install --package-lock-only --force` to update versions
+3. Verify darwin entries are preserved: `grep -c '"darwin"' package-lock.json` (should be ≥5)
+4. For a complete lockfile regeneration, do it on macOS
+
+### Signed Builds
+
+To create a signed and notarized build:
+
+```bash
+# Set environment variables
+export BB_SIGN_APP=true
+export BB_NOTARIZE_APP=true
+export APPLE_ID=your-apple-id@example.com
+export APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx
+export APPLE_TEAM_ID=XXXXXXXXXX
+
+# Build with signing
+cd packages/server && npm run dist
+```
+
+### Custom Update Server
+
+To point builds at a custom update server instead of the official BlueBubbles releases:
+
+```bash
+export BB_UPDATE_SERVER_URL=https://your-server.com/updates
+cd packages/server && npm run dist
+```
+
 ## Contributing Back Upstream
 
 These patches are designed to be upstreamable. If contributing:
