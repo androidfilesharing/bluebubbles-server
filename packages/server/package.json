@@ -12,6 +12,8 @@
         "build": "export NODE_ENV=production && webpack --config ./scripts/webpack.main.prod.config.js",
         "start": "export NODE_ENV=development && webpack --config ./scripts/webpack.main.config.js && electron ./dist/main.js",
         "lint": "eslint --ext=jsx,js,tsx,ts src",
+        "test": "jest --testPathPattern=security.test.ts",
+        "test:security": "jest --testPathPattern=security.test.ts --verbose",
         "dist": "npm run build && electron-builder build --mac --publish never --config ./scripts/electron-builder-config.js",
         "release": "npm run build && electron-builder build --mac --publish always --config ./scripts/electron-builder-config.js",
         "rebuild": "electron-rebuild -f better-sqlite3 node-mac-contacts node-mac-permissions",
@@ -33,6 +35,9 @@
     },
     "devDependencies": {
         "@babel/core": "^7.16.12",
+        "@types/jest": "^29.5.12",
+        "jest": "^29.7.0",
+        "ts-jest": "^29.1.2",
         "@babel/plugin-proposal-decorators": "^7.24.7",
         "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
         "@babel/plugin-transform-class-properties": "^7.24.7",
