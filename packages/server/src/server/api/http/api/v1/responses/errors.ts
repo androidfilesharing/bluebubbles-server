@@ -113,3 +113,17 @@ export class IMessageError extends HTTPError {
         });
     }
 }
+
+export class TooManyRequests extends HTTPError {
+    constructor(response?: ResponseParams & { retryAfter?: number }) {
+        super({
+            status: 429,
+            message: response?.message ?? "Too many requests. Please try again later.",
+            error: {
+                type: ErrorTypes.AUTHENTICATION_ERROR,
+                message: response?.error ?? "Rate limit exceeded"
+            },
+            data: { ...response?.data, retryAfter: response?.retryAfter }
+        });
+    }
+}

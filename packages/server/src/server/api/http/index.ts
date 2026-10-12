@@ -14,6 +14,13 @@ import * as fs from "fs";
 // Internal libraries
 import { Server } from "@server";
 import { isNotEmpty, onlyAlphaNumeric, safeTrim } from "@server/helpers/utils";
+import {
+    secureCompare,
+    checkRateLimit,
+    recordFailedAttempt,
+    clearRateLimit,
+    extractCredential
+} from "./security";
 import { EventCache } from "@server/eventCache";
 import { CertificateService } from "@server/services/certificateService";
 
@@ -190,20 +197,62 @@ export class HttpService extends Loggable {
                 this.log.info(`Client disconnected (Total Clients: ${this.socketServer.sockets.sockets.size})`);
             });
 
-            let pass = socket.handshake.query?.password ?? socket.handshake.query?.guid;
+            const clientIp = socket.handshake.address || "unknown";
+            const windowMs = (Server().repo.getConfig("auth_rate_limit_window_ms") as number) || 60000;
+            const maxAttempts = (Server().repo.getConfig("auth_rate_limit_max_attempts") as number) || 10;
+            const lockoutDurationMs = (Server().repo.getConfig("auth_lockout_duration_ms") as number) || 300000;
+
+            const rateLimitCheck = checkRateLimit(clientIp, { windowMs, maxAttempts, lockoutDurationMs });
+            if (!rateLimitCheck.allowed) {
+                this.log.info(`Client rate-limited. Closing connection.`);
+                socket.emit("exception", { error: "Too many authentication attempts. Please try again later." });
+                socket.disconnect();
+                return;
+            }
+
             const cfgPass = String((await Server().repo.getConfig("password")) as string);
+            const allowQueryParam = Boolean(Server().repo.getConfig("allow_query_param_auth"));
 
-            // Decode the param incase it contains URL encoded characters
-            pass = decodeURI(pass as string);
+            const authHeader = socket.handshake.headers?.authorization;
+            const authPayload = socket.handshake.auth as { password?: string; token?: string };
+            const queryParams = socket.handshake.query as { guid?: string; password?: string; token?: string };
 
-            // Basic authentication
-            if (safeTrim(pass) === safeTrim(cfgPass)) {
+            let credential: string | null = null;
+
+            if (authHeader) {
+                const extracted = extractCredential(authHeader, {}, true);
+                credential = extracted.credential;
+            }
+
+            if (!credential && authPayload?.password) {
+                credential = authPayload.password;
+            } else if (!credential && authPayload?.token) {
+                credential = authPayload.token;
+            }
+
+            if (!credential && allowQueryParam) {
+                const extracted = extractCredential(undefined, queryParams, true);
+                credential = extracted.credential;
+            }
+
+            if (credential) {
+                credential = decodeURI(credential);
+            }
+
+            if (credential && secureCompare(safeTrim(credential), safeTrim(cfgPass))) {
+                clearRateLimit(clientIp);
                 this.log.info(
                     `Client Authenticated Successfully (Total Clients: ${this.socketServer.sockets.sockets.size})`
                 );
             } else {
+                const result = recordFailedAttempt(clientIp, { windowMs, maxAttempts, lockoutDurationMs });
                 socket.disconnect();
-                this.log.info(`Closing client connection. Authentication failed.`);
+                if (result.locked) {
+                    this.log.info(`Closing client connection. Authentication failed. Account locked.`);
+                } else {
+                    this.log.info(`Closing client connection. Authentication failed.`);
+                }
+                return;
             }
 
             /**
