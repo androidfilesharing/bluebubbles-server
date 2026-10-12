@@ -113,11 +113,65 @@ export class HttpService extends Loggable {
     configureKoa() {
         if (!this.koaApp) return;
 
-        // Allow cross origin requests
-        this.koaApp.use(koaCors());
+        // Configure CORS with an allowlist
+        // Empty string means allow all origins (backwards compatible)
+        // Comma-separated list restricts to those origins
+        // Supports wildcards like "*.bluebubbles.app"
+        const corsOrigins = Server().repo.getConfig("cors_allowed_origins") as string;
+        const allowedOrigins = corsOrigins
+            ? corsOrigins.split(",").map(o => o.trim()).filter(o => o.length > 0)
+            : [];
 
-        // This allows us to properly pull the IP from the request
-        this.koaApp.proxy = true;
+        const checkOrigin = (requestOrigin: string | undefined): string | boolean => {
+            if (!requestOrigin) {
+                return false;
+            }
+
+            // If no allowlist configured, allow all origins (backwards compatible)
+            if (allowedOrigins.length === 0) {
+                return requestOrigin;
+            }
+
+            for (const pattern of allowedOrigins) {
+                if (pattern === "*") {
+                    return requestOrigin;
+                }
+
+                // Handle wildcard subdomain patterns like "*.example.com"
+                if (pattern.startsWith("*.")) {
+                    const suffix = pattern.substring(1); // ".example.com"
+                    try {
+                        const url = new URL(requestOrigin);
+                        if (url.hostname.endsWith(suffix) || url.hostname === suffix.substring(1)) {
+                            return requestOrigin;
+                        }
+                    } catch {
+                        // Invalid URL
+                    }
+                } else if (requestOrigin === pattern) {
+                    return requestOrigin;
+                }
+            }
+
+            this.log.debug(`CORS blocked request from origin: ${requestOrigin}`);
+            return false;
+        };
+
+        this.koaApp.use(
+            koaCors({
+                origin: (request) => {
+                    const result = checkOrigin(request.headers.origin);
+                    return typeof result === "string" ? result : "";
+                },
+                credentials: true
+            })
+        );
+
+        // Configure proxy trust for X-Forwarded-For header
+        // Only enable this when running behind a known proxy (e.g., Cloudflare, nginx)
+        // to prevent IP spoofing via X-Forwarded-For header
+        const trustProxy = Boolean(Server().repo.getConfig("trust_proxy"));
+        this.koaApp.proxy = trustProxy;
 
         // This is used here so that we can catch errors in KoaBody as well
         this.koaApp.use(ErrorMiddleware);
